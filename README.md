@@ -60,11 +60,16 @@ A comprehensive Model Context Protocol (MCP) server for personal expense and inc
    # or if using uv
    uv sync
    ```
-
-3. Run the MCP server:
-   ```bash
-   python main.py
+3. add the server to the claude server:
+   ```bash 
+   # using uv
+   uv run fastmcp install claude-desktop main.py 
    ```
+4. Test the server: :
+   ```bash 
+   # using uv
+   uv run fastmcp dev main.py 
+   ``` 
 
 ## 📖 Usage
 
