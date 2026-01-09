@@ -173,24 +173,12 @@ The database is automatically initialized when the server starts. Database files
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## 📝 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
 ## 🔒 Privacy & Security
 
 - Database files are excluded from version control
 - All financial data is stored locally on your device
 - No data is transmitted to external servers
 - MCP server runs locally for maximum privacy
-
-## 📞 Support
-
-If you encounter any issues or have questions:
-1. Check the existing issues on GitHub
-2. Create a new issue with detailed information
-3. Include error messages, steps to reproduce, and your environment details
-
 ---
 
 **Built with ❤️ for personal finance management**
