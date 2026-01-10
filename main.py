@@ -1,5 +1,4 @@
 from fastmcp import FastMCP
-from src.initialize_db import init_db
 import sqlite3
 import os
 
@@ -16,8 +15,31 @@ CATEGORIES_PATH = os.path.join(DB_PATH, CATEGORIES)  # manually create categorie
 mcp = FastMCP("ExpenseTracker")
 
 
+def init_db():
+    with sqlite3.connect(DB_FILE_PATH) as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS expenses(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                amount REAL NOT NULL,
+                category TEXT NOT NULL,
+                subcategory TEXT DEFAULT '',
+                note TEXT DEFAULT ''
+            )
+        """)
+        
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS credits(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                amount REAL NOT NULL,
+                category TEXT NOT NULL,
+                subcategory TEXT DEFAULT '',
+                note TEXT DEFAULT ''
+            )
+        """)
 
-init_db = init_db(db_path=DB_FILE_PATH)
+init_db()
 
 @mcp.tool()
 def add_expense(date, amount, category, subcategory="", note=""):
@@ -46,6 +68,59 @@ def list_expenses(start_date, end_date):
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 @mcp.tool()
+def remove_expenses(date, amount, category, subcategory="", note=""):
+    """Delete expenses matching the specified criteria"""
+    with sqlite3.connect(DB_FILE_PATH) as c:
+        cur = c.execute(
+            """
+            DELETE FROM expenses 
+            WHERE date = ? AND amount = ? AND category = ? AND subcategory = ? AND note = ?
+            """,
+            (date, amount, category, subcategory, note)
+        )
+        if cur.rowcount > 0:
+            return {"status": "ok", "message": f"Deleted {cur.rowcount} expense(s)"}
+        else:
+            return {"status": "error", "message": "No matching expenses found"}
+
+@mcp.tool()
+def edit_expenses(expense_id, date, amount, category, subcategory="", note=""):
+    """Edit an existing expense. Only provide values for fields you want to update."""
+    update_fields = []
+    params = []
+    
+    if date is not None:
+        update_fields.append("date = ?")
+        params.append(date)
+    if amount is not None:
+        update_fields.append("amount = ?")
+        params.append(amount)
+    if category is not None:
+        update_fields.append("category = ?")
+        params.append(category)
+    if subcategory is not None:
+        update_fields.append("subcategory = ?")
+        params.append(subcategory)
+    if note is not None:
+        update_fields.append("note = ?")
+        params.append(note)
+        
+    if not update_fields:
+        return {"status": "error", "message": "No fields provided to update"}
+    # Add the ID to the parameters for the WHERE clause
+    params.append(expense_id)
+    
+    # Build the UPDATE query
+    query = f"UPDATE expenses SET {', '.join(update_fields)} WHERE id = ?"
+    
+    with sqlite3.connect(DB_FILE_PATH) as c:
+        cur = c.execute(query, params)
+        if cur.rowcount > 0:
+            return {"status": "ok", "message": f"Expense {expense_id} updated successfully"}
+        else:
+            return {"status": "error", "message": f"Expense {expense_id} not found"}
+
+@mcp.tool()
 def summarize(start_date, end_date, category=None):
     '''Summarize expenses by category within an inclusive date range.'''
     with sqlite3.connect(DB_FILE_PATH) as c:
@@ -68,26 +143,40 @@ def summarize(start_date, end_date, category=None):
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
-@mcp.resource("expense://categories", mime_type="application/json")
-def categories():
-    # Read fresh each time so you can edit the file without restarting
-    with open(CATEGORIES_PATH, "r", encoding="utf-8") as f:
-        import json
-        return json.load(f)
+
+
+
+
 
 @mcp.tool()
-def add_credit(date, amount, category, subcategory="", note=""):
-    '''Add a new credit/income entry to the database.'''
-    with sqlite3.connect(DB_FILE_PATH) as c:
-        cur = c.execute(
-            "INSERT INTO credits(date, amount, category, subcategory, note) VALUES (?,?,?,?,?)",
-            (date, amount, category, subcategory, note)
-        )
-        return {"status": "ok", "id": cur.lastrowid}
-
+def credit_amount(date, amount, category, subcategory="", note=""):
+    """Add a new credit/income entry to the database.
+    
+    Args:
+        date (str): Date in YYYY-MM-DD format
+        amount (float): Income amount
+        category (str): Income category (employment, investments, etc.)
+        subcategory (str, optional): Specific subcategory
+        note (str, optional): Additional notes
+    """
+    try:
+        with sqlite3.connect(DB_FILE_PATH) as c:
+            cur = c.execute(
+                """
+                INSERT INTO credits (date, amount, category, subcategory, note) 
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (date, amount, category, subcategory, note)
+            )
+            return {"status": "ok", "id": cur.lastrowid, "message": f"Credit entry added with ID {cur.lastrowid}"}
+    except Exception as e:
+        return {"status": "error", "message": f"Database error: {str(e)}"}
+    
+    
+    
 @mcp.tool()
 def list_credits(start_date, end_date):
-    '''List credit/income entries within an inclusive date range.'''
+    '''List credits entries within an inclusive date range.'''
     with sqlite3.connect(DB_FILE_PATH) as c:
         cur = c.execute(
             """
@@ -102,21 +191,27 @@ def list_credits(start_date, end_date):
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 @mcp.tool()
-def delete_expense(expense_id):
-    '''Delete an expense entry by ID.'''
+def remove_credits(date, amount, category, subcategory="", note=""):
+    """Delete expenses matching the specified criteria"""
     with sqlite3.connect(DB_FILE_PATH) as c:
-        cur = c.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+        cur = c.execute(
+            """
+            DELETE FROM credits 
+            WHERE date = ? AND amount = ? AND category = ? AND subcategory = ? AND note = ?
+            """,
+            (date, amount, category, subcategory, note)
+        )
         if cur.rowcount > 0:
-            return {"status": "ok", "message": f"Expense {expense_id} deleted successfully"}
+            return {"status": "ok", "message": f"Deleted {cur.rowcount} expense(s)"}
         else:
-            return {"status": "error", "message": f"Expense {expense_id} not found"}
+            return {"status": "error", "message": "No matching expenses found"}
 
 @mcp.tool()
-def edit_expense(expense_id, date=None, amount=None, category=None, subcategory=None, note=None):
-    '''Edit an existing expense entry. Only provide values for fields you want to update.'''
+def edit_credits(expense_id, date, amount, category, subcategory="", note=""):
+    """Edit an existing expense. Only provide values for fields you want to update."""
     update_fields = []
     params = []
-
+    
     if date is not None:
         update_fields.append("date = ?")
         params.append(date)
@@ -132,70 +227,25 @@ def edit_expense(expense_id, date=None, amount=None, category=None, subcategory=
     if note is not None:
         update_fields.append("note = ?")
         params.append(note)
-
+        
     if not update_fields:
         return {"status": "error", "message": "No fields provided to update"}
-
+    # Add the ID to the parameters for the WHERE clause
     params.append(expense_id)
-
-    query = f"UPDATE expenses SET {', '.join(update_fields)} WHERE id = ?"
-
-    with sqlite3.connect(DB_FILE_PATH) as c:
-        cur = c.execute(query, params)
-        if cur.rowcount > 0:
-            return {"status": "ok", "message": f"Expense {expense_id} updated successfully"}
-        else:
-            return {"status": "error", "message": f"Expense {expense_id} not found"}
-
-@mcp.tool()
-def edit_credit(credit_id, date=None, amount=None, category=None, subcategory=None, note=None):
-    '''Edit an existing credit entry. Only provide values for fields you want to update.'''
-    update_fields = []
-    params = []
-
-    if date is not None:
-        update_fields.append("date = ?")
-        params.append(date)
-    if amount is not None:
-        update_fields.append("amount = ?")
-        params.append(amount)
-    if category is not None:
-        update_fields.append("category = ?")
-        params.append(category)
-    if subcategory is not None:
-        update_fields.append("subcategory = ?")
-        params.append(subcategory)
-    if note is not None:
-        update_fields.append("note = ?")
-        params.append(note)
-
-    if not update_fields:
-        return {"status": "error", "message": "No fields provided to update"}
-
-    params.append(credit_id)
-
+    
+    # Build the UPDATE query
     query = f"UPDATE credits SET {', '.join(update_fields)} WHERE id = ?"
-
+    
     with sqlite3.connect(DB_FILE_PATH) as c:
         cur = c.execute(query, params)
         if cur.rowcount > 0:
-            return {"status": "ok", "message": f"Credit {credit_id} updated successfully"}
+            return {"status": "ok", "message": f"credits {expense_id} updated successfully"}
         else:
-            return {"status": "error", "message": f"Credit {credit_id} not found"}
-
+            return {"status": "error", "message": f"credits {expense_id} not found"}
+    
 @mcp.tool()
-def delete_credit(credit_id):
-    '''Delete a credit entry by ID.'''
-    with sqlite3.connect(DB_FILE_PATH) as c:
-        cur = c.execute("DELETE FROM credits WHERE id = ?", (credit_id,))
-        if cur.rowcount > 0:
-            return {"status": "ok", "message": f"Credit {credit_id} deleted successfully"}
-        else:
-            return {"status": "error", "message": f"Credit {credit_id} not found"}
-
-@mcp.tool()
-def summarize_credits(start_date, end_date, category=None):
-    '''Summarize credits by category within an inclusive date range.'''
+def summarize_credit(start_date, end_date, category=None):
+    '''Summarize expenses by category within an inclusive date range.'''
     with sqlite3.connect(DB_FILE_PATH) as c:
         query = (
             """
@@ -216,5 +266,12 @@ def summarize_credits(start_date, end_date, category=None):
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
+
+
+@mcp.resource("expense://categories", mime_type="application/json")
+def categories():
+    # Read fresh each time so you can edit the file without restarting
+    with open(CATEGORIES_PATH, "r", encoding="utf-8") as f:
+        return f.read()
 if __name__ == "__main__":
     mcp.run()

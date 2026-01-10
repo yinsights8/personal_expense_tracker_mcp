@@ -158,11 +158,48 @@
       "rounding",
       "other"
     ],
-
     "credited": {
-      "employment": ["salary", "freelance", "business_income"],
-      "investments": ["dividends", "interest", "capital_gains"],
-      "loans": ["personal_loan", "student_loan", "mortgage"],
-      "other": ["gift", "refund", "other"]
-      }
+      "employment": [
+        "salary",
+        "freelance", 
+        "business_income",
+        "consulting",
+        "overtime",
+        "bonus",
+        "commission"
+      ],
+      "investments": [
+        "dividends",
+        "interest_income",
+        "capital_gains",
+        "rental_income",
+        "royalties",
+        "crypto_gains"
+      ],
+      "loans_credit": [
+        "personal_loan",
+        "student_loan",
+        "mortgage",
+        "credit_card_advance",
+        "line_of_credit",
+        "bank_loan"
+      ],
+      "government_benefits": [
+        "unemployment_benefits",
+        "social_security",
+        "pension",
+        "tax_refund",
+        "government_grants",
+        "disability_benefits"
+      ],
+      "other_income": [
+        "gift_received",
+        "inheritance",
+        "insurance_payout",
+        "legal_settlement",
+        "crowdfunding",
+        "affiliate_income",
+        "side_hustle"
+      ]
+    }
   }
