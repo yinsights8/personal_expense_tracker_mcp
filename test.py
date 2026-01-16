@@ -3,12 +3,12 @@ import random
 
 
 # how to run
-# Step 1: terminal 1: uv run main.py  
+# Step 1: terminal 1: uv run test.py  
 # Step 2: terminal 2: npx @modelcontextprotocol/inspector
 # Step 3: paste this localhost url and /mcp i.e 
 #         http://0.0.0.0:8000/mcp in url field
 # if __name__ == "__main__":
-    # mcp.run(transport='http', , host='0.0.0.0', port=8000)
+    # mcp.run(transport='http', , host='0.0.0.0', port=8000) # or stdio
 
 
 mcp = FastMCP("testing-mcp", host='0.0.0.0', port=8000)
