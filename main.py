@@ -1,7 +1,8 @@
 from fastmcp import FastMCP
-import sqlite3
+import aiosqlite
 from pathlib import Path
 import json
+from contextlib import asynccontextmanager
 
 # -----------------------------
 # Storage location (writable)
@@ -9,8 +10,8 @@ import json
 APP_DIR = Path.home() / ".expense_tracker"
 APP_DIR.mkdir(parents=True, exist_ok=True)
 
-DB_NAME = "personal_expence_tracker.db"  
-DB_FILE_PATH = str(APP_DIR / DB_NAME)
+DB_NAME = "personal_expence_tracker.db"  # keep your original name
+DB_FILE_PATH = APP_DIR / DB_NAME
 
 CATEGORIES_NAME = "categories.json"
 CATEGORIES_PATH = APP_DIR / CATEGORIES_NAME
@@ -19,21 +20,8 @@ mcp = FastMCP("ExpenseTracker")
 
 
 # -----------------------------
-# SQLite helpers
+# Helpers
 # -----------------------------
-def get_conn() -> sqlite3.Connection:
-    """
-    Opens SQLite in read/write/create mode (rwc) so permission issues show up immediately.
-    Sets WAL mode for better concurrency & fewer locking issues.
-    """
-    conn = sqlite3.connect(f"file:{DB_FILE_PATH}?mode=rwc", uri=True, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
-    conn.execute("PRAGMA synchronous = NORMAL;")
-    return conn
-
-
 def ensure_categories_file():
     if not CATEGORIES_PATH.exists():
         default = {
@@ -50,9 +38,33 @@ def ensure_categories_file():
         CATEGORIES_PATH.write_text(json.dumps(default, indent=2), encoding="utf-8")
 
 
-def init_db():
-    with get_conn() as c:
-        c.execute("""
+@asynccontextmanager
+async def get_conn():
+    """
+    Async SQLite connection. mode=rwc makes permission issues explicit.
+    WAL improves reliability & reduces locking issues.
+    """
+    # Use URI for mode=rwc
+    db_uri = f"file:{DB_FILE_PATH}?mode=rwc"
+    conn = await aiosqlite.connect(db_uri, uri=True, timeout=30)
+    conn.row_factory = aiosqlite.Row
+
+    try:
+        await conn.execute("PRAGMA foreign_keys = ON;")
+        await conn.execute("PRAGMA journal_mode = WAL;")
+        await conn.execute("PRAGMA synchronous = NORMAL;")
+        yield conn
+        await conn.commit()
+    except:
+        await conn.rollback()
+        raise
+    finally:
+        await conn.close()
+
+
+async def init_db():
+    async with get_conn() as c:
+        await c.execute("""
             CREATE TABLE IF NOT EXISTS expenses(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,
@@ -62,7 +74,7 @@ def init_db():
                 note TEXT DEFAULT ''
             )
         """)
-        c.execute("""
+        await c.execute("""
             CREATE TABLE IF NOT EXISTS credits(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,
@@ -74,33 +86,33 @@ def init_db():
         """)
 
 
-ensure_categories_file()
-init_db()
+def row_to_dict(row: aiosqlite.Row) -> dict:
+    return dict(row) if row is not None else {}
 
 
 # -----------------------------
-# Tools: Expenses
+# Tools: Expenses (async)
 # -----------------------------
 @mcp.tool()
-def add_expense(date: str, amount: float, category: str, subcategory: str = "", note: str = ""):
+async def add_expense(date: str, amount: float, category: str, subcategory: str = "", note: str = ""):
     """Add a new expense entry to the database."""
     try:
-        with get_conn() as c:
-            cur = c.execute(
+        async with get_conn() as c:
+            cur = await c.execute(
                 "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (?,?,?,?,?)",
                 (date, amount, category, subcategory, note)
             )
-            return {"status": "ok", "id": cur.lastrowid, "db_path": DB_FILE_PATH}
+            return {"status": "ok", "id": cur.lastrowid, "db_path": str(DB_FILE_PATH)}
     except Exception as e:
-        return {"status": "error", "error": repr(e), "db_path": DB_FILE_PATH}
+        return {"status": "error", "error": repr(e), "db_path": str(DB_FILE_PATH)}
 
 
 @mcp.tool()
-def list_expenses(start_date: str, end_date: str):
+async def list_expenses(start_date: str, end_date: str):
     """List expense entries within an inclusive date range."""
     try:
-        with get_conn() as c:
-            cur = c.execute(
+        async with get_conn() as c:
+            cur = await c.execute(
                 """
                 SELECT id, date, amount, category, subcategory, note
                 FROM expenses
@@ -109,32 +121,33 @@ def list_expenses(start_date: str, end_date: str):
                 """,
                 (start_date, end_date)
             )
-            return [dict(r) for r in cur.fetchall()]
+            rows = await cur.fetchall()
+            return [row_to_dict(r) for r in rows]
     except Exception as e:
-        return {"status": "error", "error": repr(e), "db_path": DB_FILE_PATH}
+        return {"status": "error", "error": repr(e), "db_path": str(DB_FILE_PATH)}
 
 
 @mcp.tool()
-def remove_expenses(date: str, amount: float, category: str, subcategory: str = "", note: str = ""):
+async def remove_expenses(date: str, amount: float, category: str, subcategory: str = "", note: str = ""):
     """Delete expenses matching the specified criteria."""
     try:
-        with get_conn() as c:
-            cur = c.execute(
+        async with get_conn() as c:
+            cur = await c.execute(
                 """
                 DELETE FROM expenses
                 WHERE date = ? AND amount = ? AND category = ? AND subcategory = ? AND note = ?
                 """,
                 (date, amount, category, subcategory, note)
             )
-            if cur.rowcount > 0:
+            if cur.rowcount and cur.rowcount > 0:
                 return {"status": "ok", "message": f"Deleted {cur.rowcount} expense(s)"}
             return {"status": "error", "message": "No matching expenses found"}
     except Exception as e:
-        return {"status": "error", "error": repr(e), "db_path": DB_FILE_PATH}
+        return {"status": "error", "error": repr(e), "db_path": str(DB_FILE_PATH)}
 
 
 @mcp.tool()
-def edit_expenses(expense_id: int, date=None, amount=None, category=None, subcategory=None, note=None):
+async def edit_expenses(expense_id: int, date=None, amount=None, category=None, subcategory=None, note=None):
     """
     Edit an existing expense. Provide only fields you want to update.
     Example: edit_expenses(3, amount=12.50, note="updated")
@@ -165,21 +178,20 @@ def edit_expenses(expense_id: int, date=None, amount=None, category=None, subcat
         params.append(expense_id)
         query = f"UPDATE expenses SET {', '.join(update_fields)} WHERE id = ?"
 
-        with get_conn() as c:
-            cur = c.execute(query, params)
-            if cur.rowcount > 0:
+        async with get_conn() as c:
+            cur = await c.execute(query, params)
+            if cur.rowcount and cur.rowcount > 0:
                 return {"status": "ok", "message": f"Expense {expense_id} updated successfully"}
             return {"status": "error", "message": f"Expense {expense_id} not found"}
-
     except Exception as e:
-        return {"status": "error", "error": repr(e), "db_path": DB_FILE_PATH}
+        return {"status": "error", "error": repr(e), "db_path": str(DB_FILE_PATH)}
 
 
 @mcp.tool()
-def summarize(start_date: str, end_date: str, category: str = None):
+async def summarize(start_date: str, end_date: str, category: str = None):
     """Summarize expenses by category within an inclusive date range."""
     try:
-        with get_conn() as c:
+        async with get_conn() as c:
             query = """
                 SELECT category, SUM(amount) AS total_amount
                 FROM expenses
@@ -192,35 +204,37 @@ def summarize(start_date: str, end_date: str, category: str = None):
                 params.append(category)
 
             query += " GROUP BY category ORDER BY category ASC"
-            cur = c.execute(query, params)
-            return [dict(r) for r in cur.fetchall()]
+
+            cur = await c.execute(query, params)
+            rows = await cur.fetchall()
+            return [row_to_dict(r) for r in rows]
     except Exception as e:
-        return {"status": "error", "error": repr(e), "db_path": DB_FILE_PATH}
+        return {"status": "error", "error": repr(e), "db_path": str(DB_FILE_PATH)}
 
 
 # -----------------------------
-# Tools: Credits
+# Tools: Credits (async)
 # -----------------------------
 @mcp.tool()
-def credit_amount(date: str, amount: float, category: str, subcategory: str = "", note: str = ""):
+async def credit_amount(date: str, amount: float, category: str, subcategory: str = "", note: str = ""):
     """Add a new credit/income entry to the database."""
     try:
-        with get_conn() as c:
-            cur = c.execute(
+        async with get_conn() as c:
+            cur = await c.execute(
                 "INSERT INTO credits(date, amount, category, subcategory, note) VALUES (?,?,?,?,?)",
                 (date, amount, category, subcategory, note)
             )
-            return {"status": "ok", "id": cur.lastrowid, "db_path": DB_FILE_PATH}
+            return {"status": "ok", "id": cur.lastrowid, "db_path": str(DB_FILE_PATH)}
     except Exception as e:
-        return {"status": "error", "error": repr(e), "db_path": DB_FILE_PATH}
+        return {"status": "error", "error": repr(e), "db_path": str(DB_FILE_PATH)}
 
 
 @mcp.tool()
-def list_credits(start_date: str, end_date: str):
-    """List credits entries within an inclusive date range."""
+async def list_credits(start_date: str, end_date: str):
+    """List credit entries within an inclusive date range."""
     try:
-        with get_conn() as c:
-            cur = c.execute(
+        async with get_conn() as c:
+            cur = await c.execute(
                 """
                 SELECT id, date, amount, category, subcategory, note
                 FROM credits
@@ -229,32 +243,33 @@ def list_credits(start_date: str, end_date: str):
                 """,
                 (start_date, end_date)
             )
-            return [dict(r) for r in cur.fetchall()]
+            rows = await cur.fetchall()
+            return [row_to_dict(r) for r in rows]
     except Exception as e:
-        return {"status": "error", "error": repr(e), "db_path": DB_FILE_PATH}
+        return {"status": "error", "error": repr(e), "db_path": str(DB_FILE_PATH)}
 
 
 @mcp.tool()
-def remove_credits(date: str, amount: float, category: str, subcategory: str = "", note: str = ""):
+async def remove_credits(date: str, amount: float, category: str, subcategory: str = "", note: str = ""):
     """Delete credits matching the specified criteria."""
     try:
-        with get_conn() as c:
-            cur = c.execute(
+        async with get_conn() as c:
+            cur = await c.execute(
                 """
                 DELETE FROM credits
                 WHERE date = ? AND amount = ? AND category = ? AND subcategory = ? AND note = ?
                 """,
                 (date, amount, category, subcategory, note)
             )
-            if cur.rowcount > 0:
+            if cur.rowcount and cur.rowcount > 0:
                 return {"status": "ok", "message": f"Deleted {cur.rowcount} credit(s)"}
             return {"status": "error", "message": "No matching credits found"}
     except Exception as e:
-        return {"status": "error", "error": repr(e), "db_path": DB_FILE_PATH}
+        return {"status": "error", "error": repr(e), "db_path": str(DB_FILE_PATH)}
 
 
 @mcp.tool()
-def edit_credits(credit_id: int, date=None, amount=None, category=None, subcategory=None, note=None):
+async def edit_credits(credit_id: int, date=None, amount=None, category=None, subcategory=None, note=None):
     """Edit an existing credit. Provide only fields you want to update."""
     try:
         update_fields = []
@@ -282,21 +297,20 @@ def edit_credits(credit_id: int, date=None, amount=None, category=None, subcateg
         params.append(credit_id)
         query = f"UPDATE credits SET {', '.join(update_fields)} WHERE id = ?"
 
-        with get_conn() as c:
-            cur = c.execute(query, params)
-            if cur.rowcount > 0:
+        async with get_conn() as c:
+            cur = await c.execute(query, params)
+            if cur.rowcount and cur.rowcount > 0:
                 return {"status": "ok", "message": f"Credit {credit_id} updated successfully"}
             return {"status": "error", "message": f"Credit {credit_id} not found"}
-
     except Exception as e:
-        return {"status": "error", "error": repr(e), "db_path": DB_FILE_PATH}
+        return {"status": "error", "error": repr(e), "db_path": str(DB_FILE_PATH)}
 
 
 @mcp.tool()
-def summarize_credit(start_date: str, end_date: str, category: str = None):
+async def summarize_credit(start_date: str, end_date: str, category: str = None):
     """Summarize credits by category within an inclusive date range."""
     try:
-        with get_conn() as c:
+        async with get_conn() as c:
             query = """
                 SELECT category, SUM(amount) AS total_amount
                 FROM credits
@@ -309,18 +323,20 @@ def summarize_credit(start_date: str, end_date: str, category: str = None):
                 params.append(category)
 
             query += " GROUP BY category ORDER BY category ASC"
-            cur = c.execute(query, params)
-            return [dict(r) for r in cur.fetchall()]
+
+            cur = await c.execute(query, params)
+            rows = await cur.fetchall()
+            return [row_to_dict(r) for r in rows]
     except Exception as e:
-        return {"status": "error", "error": repr(e), "db_path": DB_FILE_PATH}
+        return {"status": "error", "error": repr(e), "db_path": str(DB_FILE_PATH)}
 
 
 # -----------------------------
 # Resource: Categories
 # -----------------------------
 @mcp.resource("expense://categories", mime_type="application/json")
-def categories():
-    # Read fresh each time so you can edit without restarting
+async def categories():
+    # Read fresh each time
     ensure_categories_file()
     return CATEGORIES_PATH.read_text(encoding="utf-8")
 
@@ -328,5 +344,12 @@ def categories():
 # -----------------------------
 # Run server
 # -----------------------------
+# async def main():
+#     ensure_categories_file()
+#     await init_db()
+#     # mcp.run() is typically blocking; init happens before it starts serving.
+#     mcp.run(transport="http", host="0.0.0.0", port=8000)
+
+
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=8000)
